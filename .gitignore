@@ -1,0 +1,5 @@
+venv/
+.DS_Store
+tactical_map_data.json
+__pycache__/
+.pytest_cache/
