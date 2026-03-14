@@ -1,10 +1,28 @@
-# 🚁 OP: SWEEP_NET - Technical Architecture & Walkthrough
+# Technical Architecture & Walkthrough
 
-This hackathon Proof of Concept (PoC) simulates a fully autonomous, **GPS-Denied military reconnaissance drone** mapping a safe convoy route through a heavily mined area. 
+This Proof of Concept (PoC) simulates a fully autonomous, **GPS-Denied military reconnaissance drone** mapping a safe convoy route through a heavily mined area. 
 
 Because we operate under strict Electronic Warfare (EW) rules where GNSS/GPS protocols are jammed, this pipeline relies entirely on internal **Inertial Navigation Systems (INS)** via Dead Reckoning and **Computer Vision Depth Sensing**.
 
 Our execution is divided into three distinct execution phases. Below is the step-by-step breakdown of exactly how each component operates under the hood.
+
+---
+
+## 🏗️ System Architecture: Simulated vs. Executed Reality
+
+Because this is a PoC meant to run locally without expensive hardware (like an actual physical drone or live Vision/Radar arrays), certain hardware sensors are **simulated**, while the math, data processing, and tactical logic are **actually executing**.
+
+| Component | Status | How it works in this PoC |
+| :--- | :--- | :--- |
+| **Drone Hardware / Flight** | 🟡 **Simulated** | There is no physical drone. `phase1_sim.py` generates a mathematically perfect "Lawnmower" flight path matrix. |
+| **GPS Denial Constraints** | 🟢 **Actual** | The system strictly enforces GPS denial. At no point in Phase 2 or 3 does the logic use X/Y coordinates from the map. |
+| **IMU Sensors (Velocity/Yaw)** | 🟡 **Simulated** | We generate baseline Velocity and Yaw, but inject **Actual** mathematical Gaussian noise to mimic cheap hardware sensor drift. |
+| **Dead Reckoning (INS Engine)** | 🟢 **Actual** | `phase2_engine.py` **actually executes** Moving Average filters and Trigonometric integration (`dx = v * cos(yaw) * dt`) to recreate flight paths. |
+| **Ground Penetrating Radar (GPR)** | 🟡 **Simulated** | When the simulated drone passes over the artificial mine matrix, a random float `> 0.95` is injected into the CSV. |
+| **Anomaly Clustering** | 🟢 **Actual** | `phase2_engine.py` runs a legitimate spatial aggregation algorithm using KDTree logic to deduplicate physical threats within a 5-meter radius. |
+| **Multimodal Vision LLM** | 🟡 **Simulated** | We are *not* sending real images bounding boxes to an API. We trigger a mock function representing a 90% vision confirmation probability. |
+| **Depth Sensing (Z-Axis)** | 🟡 **Simulated** | Complex 3D sine wave and exponential ridge functions construct realistic terrain rather than relying on a 2GB Lidar point cloud. |
+| **A\* Pathfinding AI** | 🟢 **Actual** | The A* algorithm is a **100% real** matrix. It successfully paths through a 3D volume, avoiding blast radii and punishing steep Z-axis climbs. |
 
 ---
 
