@@ -4,6 +4,7 @@ import math
 import json
 import heapq
 import random
+import argparse
 
 # Core simulation settings matching Phase 1
 GRID_W = 500
@@ -144,7 +145,7 @@ def run_a_star(start, goal, hazards, terrain, grid_w, grid_h, step_size=10.0):
 
     return [] # No path found
 
-def process_telemetry():
+def process_telemetry(target_x=500.0, target_y=500.0):
     print("Loading encrypted telemetry logs...")
     df = pd.read_csv("telemetry_log.csv")
     
@@ -152,6 +153,7 @@ def process_telemetry():
     
     calculated_positions = []
     anomalies = []
+    raw_deviations = []
     
     # Simulating iteration through real-time streaming data over time
     prev_time = df.iloc[0]["Elapsed_ms"]
@@ -175,6 +177,10 @@ def process_telemetry():
                 "URL": row["Camera_Frame_URL"]
             })
             
+        # Check Deviation Flag (Obstacle avoidance trigger)
+        if "Deviation_Flag" in row and row["Deviation_Flag"] == 1:
+            raw_deviations.append((x, y))
+            
     print(f"INS filtering complete. Raw anomalies detected: {len(anomalies)}")
     
     # Deduplicate anomalies (cluster points that are extremely close to one another)
@@ -196,9 +202,34 @@ def process_telemetry():
     print("Calculating Topography Grid...")
     terrain_map = generate_global_terrain(GRID_W, GRID_H, 10.0, engine.path)
     
+    # --- Analyze Off-Road Viability at Deviation Points ---
+    # Deduplicate the deviation anchors
+    unique_deviations = []
+    for dx, dy in raw_deviations:
+        if not any(math.hypot(dx - ux, dy - uy) < 10.0 for ux, uy in unique_deviations):
+            unique_deviations.append((dx, dy))
+            
+    off_road_analysis = []
+    for dx, dy in unique_deviations:
+        # Snap to terrain grid points (10x10)
+        sx, sy = round(dx/10.0)*10.0, round(dy/10.0)*10.0
+        # Check immediate 3x3 surrounding Z-slope
+        local_z = []
+        for nx in [sx-10, sx, sx+10]:
+            for ny in [sy-10, sy, sy+10]:
+                if (nx, ny) in terrain_map:
+                    local_z.append(terrain_map[(nx, ny)])
+                    
+        if len(local_z) > 0:
+            variance = max(local_z) - min(local_z)
+            status = "IMPASSABLE" if variance > 8.0 else "VIABLE"
+            off_road_analysis.append({"x": dx, "y": dy, "variance": round(variance, 2), "status": status})
+            
+    print(f"Analyzed {len(off_road_analysis)} obstacle deviation sites for off-road feasibility.")
+    
     # Calculate Safe Path (Base Camp to Point B)
     start_point = (0.0, 0.0)
-    end_point = (GRID_W, GRID_H)
+    end_point = (target_x, target_y)
     
     print("Calculating safe 3D convoy route using A* and Topography constraints...")
     safe_path = run_a_star(start_point, end_point, confirmed_mines, terrain_map, GRID_W, GRID_H)
@@ -215,7 +246,8 @@ def process_telemetry():
         "trajectory": engine.path,
         "anomalies": confirmed_mines,
         "safe_route": safe_path,
-        "terrain_grid": export_terrain
+        "terrain_grid": export_terrain,
+        "off_road_viability": off_road_analysis
     }
     
     with open("tactical_map_data.json", "w") as f:
@@ -224,4 +256,10 @@ def process_telemetry():
     print("Tactical data exported to tactical_map_data.json")
 
 if __name__ == "__main__":
-    process_telemetry()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--target_x", type=float, default=500.0)
+    parser.add_argument("--target_y", type=float, default=500.0)
+    args = parser.parse_args()
+    
+    print(f"Routing Phase 2 Logic toward Point B -> ({args.target_x}, {args.target_y})")
+    process_telemetry(args.target_x, args.target_y)

@@ -120,66 +120,70 @@ def calculate_distance(points):
     return dist
 
 def render_dashboard():
-    data = load_tactical_data()
-    if not data: return
-    
-    # Header Area
-    col1, col2 = st.columns([3, 1])
-    with col1:
-        st.title("OP: SWEEP_NET // Tactical Map")
-    with col2:
-        st.markdown("<div style='text-align: right; padding-top: 1.5rem;'><span class='record-dot'></span><b>SYSTEM ONLINE</b><br><small>GPS: DENIED / INS: ACTIVE</small></div>", unsafe_allow_html=True)
-
-    # Convert lists to DataFrames for Altair
-    df_traj = pd.DataFrame(data['trajectory'], columns=['x', 'y', 'z']).reset_index()
-    df_mines = pd.DataFrame(data['anomalies'], columns=['x', 'y', 'z'])
-    df_route = pd.DataFrame(data['safe_route'], columns=['x', 'y', 'z']).reset_index()
-    
-    # Load Topographical Terrain explicitly from Phase 2
-    df_terrain = pd.DataFrame(data['terrain_grid'])
-    # Add bounds to explicitly draw 20x20 meter Quantitative Rectangles without Ordinal Axis scale overlaps
-    df_terrain['x2'] = df_terrain['x'] + 20
-    df_terrain['y2'] = df_terrain['y'] + 20
-
-    # --- Animated Processing Pipeline ---
-    if st.sidebar.button("System Reboot & Initialize Analysis", use_container_width=True, type="primary"):
-        st.session_state.has_run = False
-        
+    # --- State Initialization & Sidebar Inputs ---
     if 'has_run' not in st.session_state:
         st.session_state.has_run = False
+        st.session_state.target_x = 500.0
+        st.session_state.target_y = 500.0
 
+    with st.sidebar:
+        st.header("Mission Specs")
+        st.markdown("---")
+        
+        st.subheader("Point B Targeting")
+        demo_routes = {
+            "Operation Alpha (Default)": (500.0, 500.0),
+            "Operation Bravo (Deep Valley)": (100.0, 480.0),
+            "Operation Charlie (Steep Ridge)": (480.0, 100.0),
+            "Custom Target": None
+        }
+        
+        selected_demo = st.selectbox("Select Target Point B:", list(demo_routes.keys()))
+        
+        if selected_demo == "Custom Target":
+            col_x, col_y = st.columns(2)
+            pt_b_x = col_x.number_input("Target X", min_value=10.0, max_value=500.0, value=300.0, step=10.0)
+            pt_b_y = col_y.number_input("Target Y", min_value=10.0, max_value=500.0, value=300.0, step=10.0)
+        else:
+            pt_b_x, pt_b_y = demo_routes[selected_demo]
+            
+        if st.button("System Reboot & Initialize Analysis", use_container_width=True, type="primary"):
+            st.session_state.has_run = False
+            st.session_state.do_animation = True
+            st.session_state.target_x = pt_b_x
+            st.session_state.target_y = pt_b_y
+
+    # --- Animated Processing Pipeline ---
     if not st.session_state.has_run:
+        st.session_state.do_animation = True  # Force animation on fresh run
         play_area = st.empty()
+        import subprocess
         with play_area.container():
             st.markdown("### INITIALIZING SWEEP_NET UPLINK...")
             
-            # Step 1: Telemetry Ingestion
+            # Step 1: Telemetry Ingestion & Real-Time Setup
             with st.status("Establishing Secure Data Link...", expanded=True) as status:
-                st.write("Decrypting 12,000 telemetry packets...")
-                time.sleep(1)
-                st.write("Initializing INS Dead Reckoning Engine...")
-                time.sleep(1)
+                st.write(f"Transmitting target coordinates ({st.session_state.target_x}, {st.session_state.target_y}) to Drone...")
+                subprocess.run(["python3", "phase1_sim.py", "--target_x", str(st.session_state.target_x), "--target_y", str(st.session_state.target_y)])
+                st.write("Decrypting telemetry packets...")
                 status.update(label="Telemetry Ingested", state="complete")
                 
-            # Step 2: INS Calculation
-            progress_text = "Calculating 2D Flight Path via Velocity & Yaw Integration..."
+            # Step 2: Path Generation Bar
+            progress_text = "Tracking Adaptive 2D Flight Path & Generating Exclusions..."
             my_bar = st.progress(0, text=progress_text)
             for percent_complete in range(100):
                 time.sleep(0.01)
                 my_bar.progress(percent_complete + 1, text=progress_text)
             my_bar.empty()
             
-            # Step 3: Threat Detection & Depth Sensing
-            with st.status("Analyzing GPR Signatures & Depth Terrain Modeling...", expanded=True) as status:
-                st.write("Mapping Topological Altitudes (Z-Axis) from Vision API...")
-                time.sleep(1)
-                st.write(f"Scanning the path for GPR anomalies scoring > 0.95...")
-                time.sleep(1)
-                st.write("Clustering spatial points to remove false positives...")
-                time.sleep(1)
+            # Step 3: Threat Detection & Engine Analysis
+            with st.status("Analyzing GPR Signatures & Off-Road Viability...", expanded=True) as status:
+                st.write("Initializing INS Dead Reckoning Engine & Mapping Altitudes...")
+                subprocess.run(["python3", "phase2_engine.py", "--target_x", str(st.session_state.target_x), "--target_y", str(st.session_state.target_y)])
+                st.write("Extracting Mine Deviation Anchors...")
+                st.write("Evaluating Z-Altitude variance around dodging deviations...")
                 st.write("Sending highest-probability cluster frames to Vision LLM API for visual confirmation...")
                 time.sleep(1.5)
-                st.write(f"VISION API OVERRIDE: {len(df_mines)} lethal threats confirmed in sector.")
                 status.update(label="Threat Matrix Verified", state="complete")
                 
             # Step 4: A* Pathfinding
@@ -196,12 +200,30 @@ def render_dashboard():
         play_area.empty()
         st.session_state.has_run = True
 
+    # --- Data Loading (Post-Calculation) ---
+    data = load_tactical_data()
+    if not data: return
+    
+    # Header Area
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        st.title("OP: SWEEP_NET // Tactical Map")
+    with col2:
+        st.markdown("<div style='text-align: right; padding-top: 1.5rem;'><span class='record-dot'></span><b>SYSTEM ONLINE</b><br><small>GPS: DENIED / INS: ACTIVE</small></div>", unsafe_allow_html=True)
+
+    # Convert lists to DataFrames for Altair
+    df_traj = pd.DataFrame(data['trajectory'], columns=['x', 'y', 'z']).reset_index()
+    df_mines = pd.DataFrame(data['anomalies'], columns=['x', 'y', 'z'])
+    df_route = pd.DataFrame(data['safe_route'], columns=['x', 'y', 'z']).reset_index()
+    df_terrain = pd.DataFrame(data['terrain_grid'])
+    df_offroad = pd.DataFrame(data.get('off_road_viability', []))
+    
+    df_terrain['x2'] = df_terrain['x'] + 20
+    df_terrain['y2'] = df_terrain['y'] + 20
+
     # --- Sidebar Metrics ---
     with st.sidebar:
-        st.header("Mission Specs")
         st.markdown("---")
-        
-        # Calculate derived metrics
         ins_dist = calculate_distance(data['trajectory'])
         convoy_dist = calculate_distance(data['safe_route'])
         
@@ -218,53 +240,44 @@ def render_dashboard():
         st.markdown("</div>", unsafe_allow_html=True)
         
         st.markdown("---")
-        st.caption("A* Pathfinding Algorithm Active. Routing around confirmed threats and avoiding severe topographical elevations (terrain-aware cost calculations).")
+        st.caption("A* Pathfinding Algorithm Active. Routing around confirmed threats and avoiding severe topographical elevations.")
 
     # --- Main Visualization Area (Altair) ---
-    st.markdown("### Operational Theater (Topological Terrain & Convoy Route)")
+    st.markdown("### 🚁 Phase 1: Autonomous UAV Search Vectoring")
+    st.caption("Visualizing the drone's initial flight path as it vectors towards Point B, scanning topography and dodging detected hazards.")
     
-    # Background Grid Setup (500x500)
     base = alt.Chart(pd.DataFrame({'x': [0, 500], 'y': [0, 500]})).mark_rect(opacity=0).encode(
         x=alt.X('x:Q', scale=alt.Scale(domain=[0, 500]), title='Local X (meters)', axis=alt.Axis(gridColor='#333', domainColor='#555', tickColor='#555')),
         y=alt.Y('y:Q', scale=alt.Scale(domain=[0, 500]), title='Local Y (meters)', axis=alt.Axis(gridColor='#333', domainColor='#555', tickColor='#555'))
     ).properties(height=650, width='container')
 
-    # Topological Terrain Depth Heatmap
-    # Explicitly mapping quantitative boundaries (x to x2, y to y2) instead of ordinal categories
-    # This completely eliminates the Top/Right axis text overlaps and aligns perfectly with the main grid.
     heatmap = alt.Chart(df_terrain).mark_rect(opacity=0.6).encode(
-        x='x:Q',
-        x2='x2:Q',
-        y='y:Q',
-        y2='y2:Q',
+        x='x:Q', x2='x2:Q', y='y:Q', y2='y2:Q',
         color=alt.Color('z:Q', scale=alt.Scale(scheme='viridis', domain=[0, 45]), title='Altitude (m)'),
         tooltip=[alt.Tooltip('x:Q', title='X', format='.1f'), alt.Tooltip('y:Q', title='Y', format='.1f'), alt.Tooltip('z:Q', title='Altitude', format='.1f')]
     )
 
-    # INS Drone Sweeper Path
-    line_traj = alt.Chart(df_traj).mark_line(color='#ffffff', strokeWidth=1, opacity=0.3, strokeDash=[5,5]).encode(
+    line_traj = alt.Chart(df_traj).mark_line(color='#ffffff', strokeWidth=2, opacity=0.4, strokeDash=[4,4]).encode(
         x='x:Q', y='y:Q', order='index:Q',
         tooltip=[alt.Tooltip('x:Q', format='.1f'), alt.Tooltip('y:Q', format='.1f'), alt.Tooltip('z:Q', title='Altitude', format='.1f')]
     )
 
-    # Confirmed Mines Scatter Plot
     scatter_mines = alt.Chart(df_mines).mark_circle(size=150, color='#ff0055', opacity=0.9, stroke='#fff', strokeWidth=1).encode(
         x='x:Q', y='y:Q',
         tooltip=[alt.Tooltip('x:Q', format='.1f'), alt.Tooltip('y:Q', format='.1f')]
     )
 
-    # Safe Convoy Route (Color-coded by elevation difficulty)
+    # Dynamic Safe Convoy Route
     route_glow = alt.Chart(df_route).mark_line(strokeWidth=18, opacity=0.5).encode(
         x='x:Q', y='y:Q', order='index:Q', color=alt.value('#00ffcc')
     )
     line_route = alt.Chart(df_route).mark_line(strokeWidth=6, opacity=1.0).encode(
         x='x:Q', y='y:Q', order='index:Q',
-        color=alt.Color('z:Q', scale=alt.Scale(scheme='turbo', domain=[0,40])), # Visual indicator of path slope
-        tooltip=[alt.Tooltip('x:Q', format='.1f'), alt.Tooltip('y:Q', format='.1f'), alt.Tooltip('z:Q', title='Altitude', format='.1f')]
+        color=alt.Color('z:Q', scale=alt.Scale(scheme='turbo', domain=[0,40])), 
+        tooltip=[alt.Tooltip('x:Q', title='X', format='.1f'), alt.Tooltip('y:Q', title='Y', format='.1f'), alt.Tooltip('z:Q', title='Altitude', format='.1f')]
     )
 
-    # Start/End Markers for Convoy
-    poi_data = pd.DataFrame({'x': [0, 500], 'y': [0, 500], 'label': ['BASE CAMP', 'POINT B']})
+    poi_data = pd.DataFrame({'x': [0, st.session_state.target_x], 'y': [0, st.session_state.target_y], 'label': ['BASE CAMP', 'POINT B']})
     scatter_poi = alt.Chart(poi_data).mark_square(size=250, color='#00ffcc', opacity=0.9).encode(
         x='x:Q', y='y:Q', tooltip='label'
     )
@@ -272,13 +285,106 @@ def render_dashboard():
         x='x:Q', y='y:Q', text='label'
     )
 
-    # Layer all components
-    layered_chart = alt.layer(base, heatmap, line_traj, scatter_mines, route_glow, line_route, scatter_poi, text_poi).configure_view(
-        strokeOpacity=0,
-        fill='#0a0a0a' # Dark background matching app
-    )
+    # Compile layer sets
+    layers_convoy = [base, heatmap, line_traj, scatter_mines, route_glow, line_route, scatter_poi, text_poi]
+    
+    # Phase 1 Search doesn't show the terrain or final path yet!
+    layers_search = [base, line_traj, scatter_mines, scatter_poi, text_poi]
+    
+    # Mount off-road viability evaluation points if present
+    if not df_offroad.empty:
+        scatter_offroad = alt.Chart(df_offroad).mark_square(size=120, opacity=0.9, stroke='#fff', strokeWidth=2).encode(
+            x='x:Q', y='y:Q',
+            color=alt.condition(
+                alt.datum.status == 'VIABLE',
+                alt.value('#00ffcc'), # Cyan for viable detour
+                alt.value('#ff0055') # Magenta for impassable detour
+            ),
+            tooltip=['x', 'y', 'status', 'variance']
+        )
+        layers_convoy.insert(4, scatter_offroad)
+        layers_search.insert(4, scatter_offroad)
 
-    st.altair_chart(layered_chart, use_container_width=True)
+    chart_convoy = alt.layer(*layers_convoy).configure_view(strokeOpacity=0, fill='#0a0a0a')
+    chart_search_static = alt.layer(*layers_search).configure_view(strokeOpacity=0, fill='#0a0a0a')
+
+    search_placeholder = st.empty()
+    
+    # --- ANIMATION LOGIC ---
+    if st.session_state.get('do_animation', False):
+        st.session_state.do_animation = False
+        import numpy as np
+        
+        # Precompute Discovery Indices (when the drone first gets near the mine/anchor)
+        mines_discovery = []
+        for _, m in df_mines.iterrows():
+            dists = np.hypot(df_traj['x'] - m['x'], df_traj['y'] - m['y'])
+            mines_discovery.append(dists.idxmin() if not dists.empty else 0)
+        df_mines['discovery_idx'] = mines_discovery
+        
+        if not df_offroad.empty:
+            offroad_discovery = []
+            for _, o in df_offroad.iterrows():
+                dists = np.hypot(df_traj['x'] - o['x'], df_traj['y'] - o['y'])
+                offroad_discovery.append(dists.idxmin() if not dists.empty else 0)
+            df_offroad['discovery_idx'] = offroad_discovery
+            
+        num_frames = 100
+        chunk_size = max(1, len(df_traj) // num_frames)
+        
+        for frame_idx in range(1, len(df_traj) + chunk_size, chunk_size):
+            current_step = min(frame_idx, len(df_traj) - 1)
+            
+            # The drone's path includes its history so far, PLUS a theoretical straight line to the end goal.
+            history_pts = df_traj.iloc[:current_step+1]
+            current_x, current_y = history_pts.iloc[-1]['x'], history_pts.iloc[-1]['y']
+            
+            # Create a dynamic dataframe for the current perceived path
+            frame_path_data = history_pts[['x', 'y', 'z']].copy()
+            # Append the direct vector to Point B from wherever the drone currently is
+            frame_path_data = pd.concat([frame_path_data, pd.DataFrame([{'x': st.session_state.target_x, 'y': st.session_state.target_y, 'z': 0.0}])], ignore_index=True)
+            frame_path_data['index'] = range(len(frame_path_data))
+            
+            f_line_traj = alt.Chart(frame_path_data).mark_line(color='#ffffff', strokeWidth=4, opacity=1.0, strokeDash=[4,4]).encode(
+                x='x:Q', y='y:Q', order='index:Q'
+            )
+            
+            frame_mines = df_mines[df_mines['discovery_idx'] <= current_step]
+            if not frame_mines.empty:
+                f_scatter_mines = alt.Chart(frame_mines).mark_circle(size=250, color='#ff0055', opacity=1.0, stroke='#fff', strokeWidth=3).encode(
+                    x='x:Q', y='y:Q'
+                )
+            else:
+                f_scatter_mines = alt.Chart(pd.DataFrame({'x':[], 'y':[]})).mark_circle().encode(x='x:Q', y='y:Q')
+                
+            frame_layers = [base, f_line_traj, f_scatter_mines, scatter_poi, text_poi]
+            
+            if not df_offroad.empty:
+                frame_offroad = df_offroad[df_offroad['discovery_idx'] <= current_step]
+                if not frame_offroad.empty:
+                    f_scatter_offroad = alt.Chart(frame_offroad).mark_square(size=180, opacity=1.0, stroke='#fff', strokeWidth=3).encode(
+                        x='x:Q', y='y:Q',
+                        color=alt.condition(alt.datum.status == 'VIABLE', alt.value('#00ffcc'), alt.value('#ff0055'))
+                    )
+                    frame_layers.append(f_scatter_offroad)
+            
+            frame_chart = alt.layer(*frame_layers).configure_view(strokeOpacity=0, fill='#0a0a0a')
+            
+            # Force Streamlit to render the precise frame by clearing the placeholder empty block and drawing
+            search_placeholder.empty()
+            search_placeholder.altair_chart(frame_chart, use_container_width=True)
+            time.sleep(0.1) # Renders over exactly 10 seconds (100 frames * 0.1s)
+            
+        time.sleep(1.0)
+
+    # Render final static search chart
+    search_placeholder.altair_chart(chart_search_static, use_container_width=True)
+    
+    # --- PHASE 2 GROUND CONVOY CHART ---
+    st.markdown("---")
+    st.markdown("### 🚚 Phase 2: Tactical Convoy Route (A* Solution)")
+    st.caption("The fully computed safe ground route. The algorithm actively navigates through flatter valleys and avoids the 15m blast radius of all verified hazards.")
+    st.altair_chart(chart_convoy, use_container_width=True)
     
     # --- Technical Breakdown ---
     st.markdown("---")
@@ -287,35 +393,27 @@ def render_dashboard():
     col_a, col_b = st.columns(2)
     
     with col_a:
-        with st.expander("Phase 1: GPS-Denied Dead Reckoning", expanded=True):
+        with st.expander("Phase 1: Adaptive Flight & Collision Avoidance", expanded=True):
             st.markdown("""
-            **How it works:**
-            Because we are operating in an electronic warfare zone, GPS is jammed. The drone relies entirely on its **Inertial Navigation System (INS)**.
-            1. The drone logs its **Yaw** (heading) and **Velocity** every 100 milliseconds.
-            2. We apply a **Moving Average Filter** to smooth out the noisy IMU sensor drift.
-            3. *Trigonometry in Action:* We calculate the delta X and delta Y for every tick using `dx = Velocity * cos(Yaw) * dt`.
-            4. By accumulating these deltas from `(0,0)`, we plot the entire grey lawnmower flight path without ever hitting a satellite.
+            **Dynamic Obstacle Avoidance:**
+            Rather than a static lawnmower grid, the simulated drone evaluates the shortest vector to Point B and initiates a localized data-collection sweep alongside it to maximize surface intelligence. 
+            Crucially, it executes an **Active Real-Time Collision Logic**: If its flight path encroaches within a 5-meter exclusion radius of a detected mine, it mathematically overrides to trace safely around the perimeter border of the threat.
             """)
             
-        with st.expander("Phase 2: Multimodal Threat Detection"):
+        with st.expander("Phase 2: Off-Road Viability Evaluation"):
             st.markdown("""
-            **How it works:**
-            1. Throughout the flight, the **Ground Penetrating Radar (GPR)** streams anomaly scores.
-            2. Any score above `0.95` flags the current Dead-Reckoned X/Y coordinate as a suspect anomaly (shown as the glowing orange heatmap).
-            3. Because GPR has false positives (metallic debris), the coordinates are clustered using a spatial distance threshold.
-            4. **Vision API Verification:** The closest camera frame URL for that cluster is sent to a Multimodal LLM to visually verify the threat. If confirmed, it becomes a hard **Red Hazard Marker**.
+            **Off-Road Terrain Scoring:**
+            When the drone is forced to physically divert its flight path around a mine, *it drops a Deviation Anchor marker*. 
+            The Tactical Engine later isolates these exact deviation anchors on the Topological Z-grid and analyzes the surrounding variance (steepness/gradient) of the raw terrain. 
+            If the variance is minor, the detour is marked **VIABLE** (Cyan Square). If the terrain slopes aggressively, it flags the detour as **IMPASSABLE** (Magenta Square) for ground trucks.
             """)
             
     with col_b:
         with st.expander("Phase 3: The Terrain-Aware A* Matrix", expanded=True):
             st.markdown("""
-            **How it works:**
-            With the static minefield mapped and the Topological Terrain elevations sensed, we must route the convoy from Base Camp to Point B.
-            1. We construct a 3D virtual grid representing coordinates (X, Y) and altitudes (Z).
-            2. Every confirmed mine generates a **15-meter Exclusion Radius**.
-            3. We run the **A* (A-Star) Pathfinding Algorithm**. This advanced version does not just find the shortest 2D path.
-            4. **Terrain Penalty:** The algorithm assesses a massive "travel cost penalty" for severe elevation changes. It actively looks for deep, flat valleys and avoids navigating heavy ground vehicles straight over steep mountain ridges (visualized by the purple topographical heatmap)!
-            5. The final colored trail indicates the safe route gradient.
+            **A* Pathfinding Constraints:**
+            By plotting the newly detected `Point B` destination, the **A* (A-Star) Pathfinding Algorithm** generates a safe convoy route across the tactical plane.
+            It utilizes the Z-Axis topographical heatmap to punish steep terrain slopes, resulting in organic vehicle navigation that completely avoids the 15-meter hard exclusion zones around verified hazards while remaining inside the flatter valleys.
             """)
             
 if __name__ == "__main__":

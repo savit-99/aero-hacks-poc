@@ -2,6 +2,7 @@ import pandas as pd
 import numpy as np
 import math
 import hashlib
+import argparse
 
 # Base configurations
 GRID_W = 500
@@ -11,20 +12,39 @@ V_BASE = 5.0  # m/s
 DT = 0.1      # 10Hz
 NUM_MINES = 25
 
-def generate_lawnmower_waypoints():
-    """Generates the coordinates for a non-overlapping lawnmower path."""
-    waypoints = []
-    y = 0
+def generate_corridor_waypoints(start, end, width=80, spacing=20):
+    """Generates a zig-zag corridor sweep to maximize surface area along the route to Point B."""
+    dx = end[0] - start[0]
+    dy = end[1] - start[1]
+    dist = math.hypot(dx, dy)
+    angle = math.atan2(dy, dx)
+    
+    waypoints_local = []
+    x = 0
     direction = 1
-    while y <= GRID_H:
+    while x <= dist:
+        y_max = width / 2
+        y_min = -width / 2
         if direction == 1:
-            waypoints.append((0.0, float(y)))
-            waypoints.append((float(GRID_W), float(y)))
+            waypoints_local.append((x, y_min))
+            waypoints_local.append((x, y_max))
         else:
-            waypoints.append((float(GRID_W), float(y)))
-            waypoints.append((0.0, float(y)))
-        y += SWEEP_SPACING
+            waypoints_local.append((x, y_max))
+            waypoints_local.append((x, y_min))
+        x += spacing
         direction *= -1
+    
+    waypoints_local.append((dist, 0)) # End point
+    
+    # Rotate and translate back to global coords
+    cos_a = math.cos(angle)
+    sin_a = math.sin(angle)
+    waypoints = []
+    for lx, ly in waypoints_local:
+        wx = start[0] + lx * cos_a - ly * sin_a
+        wy = start[1] + lx * sin_a + ly * cos_a
+        waypoints.append(np.array([wx, wy]))
+        
     return waypoints
 
 def get_elevation(x, y):
@@ -55,9 +75,17 @@ def generate_mines():
     np.random.seed(42) # Reproducible mines
     return np.random.rand(NUM_MINES, 2) * [GRID_W, GRID_H]
 
-def simulate_data():
-    """Simulates drone flight data including noisy INS measurements and GPR scores."""
-    waypoints = generate_lawnmower_waypoints()
+def simulate_data(target_x=500.0, target_y=500.0):
+    """Simulates drone flight data to Point B and back, including real-time obstacles."""
+    start = (0.0, 0.0)
+    target = (target_x, target_y)
+    
+    # Outward sweep
+    outward_wp = generate_corridor_waypoints(start, target)
+    # Direct return home
+    return_wp = [np.array(target), np.array(start)]
+    waypoints = outward_wp + return_wp
+    
     mines = generate_mines()
     
     current_pos = np.array(waypoints[0])
@@ -78,12 +106,27 @@ def simulate_data():
                 break
             continue
             
-        # Move drone kinematically
-        dir_vec = (target_pos - current_pos) / dist
-        current_pos += dir_vec * V_BASE * DT
+        # Real-time State: Obstacle Avoidance (Maintain >5m from mines)
+        dists_to_mines = np.linalg.norm(mines - next_pos, axis=1)
+        min_dist = np.min(dists_to_mines)
+        closest_mine_idx = np.argmin(dists_to_mines)
         
-        # Calculate true yaw and velocity
-        true_yaw = math.atan2(dir_vec[1], dir_vec[0])
+        is_deviating = 0
+        if min_dist < 5.0:
+            # Dodge! Slide along the 5m exclusion radius boundary
+            mine_pos = mines[closest_mine_idx]
+            escape_vec = next_pos - mine_pos
+            escape_dist = max(np.linalg.norm(escape_vec), 0.001)
+            next_pos = mine_pos + (escape_vec / escape_dist) * 5.0
+            is_deviating = 1
+            min_dist = 5.0 # Reset min dist for GPR logic below
+            
+        # Calculate actual movement after potential dodging
+        movement_vec = next_pos - current_pos
+        move_dist = np.linalg.norm(movement_vec)
+        true_yaw = math.atan2(movement_vec[1], movement_vec[0]) if move_dist > 0.001 else 0.0
+        
+        current_pos = next_pos
         
         # Inject realistic INS noise
         yaw_noise = np.random.normal(0, 0.05) # ~2.8 degrees
@@ -97,17 +140,11 @@ def simulate_data():
         roll = np.random.normal(0, 0.02)
         
         # Determine GPR score (0 to 1 based on distance to nearest mine)
-        dists_to_mines = np.linalg.norm(mines - current_pos, axis=1)
-        min_dist = np.min(dists_to_mines)
-        
-        if min_dist < 3.0:
-            # Proximate to a mine: high detection probability
+        if min_dist < 6.0:
             gpr = np.random.uniform(0.95, 1.0)
-        elif min_dist < 8.0:
-            # Fringe read
+        elif min_dist < 10.0:
             gpr = np.random.uniform(0.4, 0.94)
         else:
-            # Background signal
             gpr = np.random.uniform(0.0, 0.3)
             
         # Add Occasional False Positives (like metallic debris)
@@ -128,6 +165,7 @@ def simulate_data():
             "Velocity_ms": round(float(noisy_vel), 4),
             "Altitude_m": round(float(altitude), 2),
             "GPR_Score": round(float(gpr), 4),
+            "Deviation_Flag": is_deviating,
             "Camera_Frame_URL": url
         })
         
@@ -141,9 +179,14 @@ def simulate_data():
     return df
 
 if __name__ == "__main__":
-    print("Initializing Phase 1 Mission Planning & Data Simulation...")
-    df = simulate_data()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--target_x", type=float, default=500.0)
+    parser.add_argument("--target_y", type=float, default=500.0)
+    args = parser.parse_args()
+    
+    print(f"Initializing Phase 1 Simulator. Vectoring Point B -> ({args.target_x}, {args.target_y})")
+    df = simulate_data(args.target_x, args.target_y)
     output_path = "telemetry_log.csv"
     df.to_csv(output_path, index=False)
-    print(f"Successfully generated {len(df)} telemetry logs representing drone sweep flight.")
+    print(f"Successfully generated {len(df)} telemetry logs representing dynamic flight.")
     print(f"Secured Data saved to {output_path}")
