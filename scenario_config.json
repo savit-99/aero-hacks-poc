@@ -1,0 +1,1 @@
+{"prompt": "sparse northern corridor with low mine density", "scenario": {"target_x": 500.0, "target_y": 500.0, "num_mines": 40, "detection_radius": 20.0, "num_drones": 2, "mine_seed": null, "scenario_brief": "Fallback scenario from prompt: sparse northern corridor with low mine density", "source": "fallback", "error": "missing_api_key"}}

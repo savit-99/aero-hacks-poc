@@ -20,7 +20,7 @@ Because this is a PoC meant to run locally without expensive hardware (like an a
 | **Dead Reckoning (INS Engine)** | 🟢 **Actual** | `phase2_engine.py` **actually executes** Moving Average filters and Trigonometric integration (`dx = v * cos(yaw) * dt`) to recreate flight paths. |
 | **Ground Penetrating Radar (GPR)** | 🟡 **Simulated** | When the simulated drone passes over the artificial mine matrix, a random float `> 0.95` is injected into the CSV. |
 | **Anomaly Clustering** | 🟢 **Actual** | `phase2_engine.py` runs a legitimate spatial aggregation algorithm using KDTree logic to deduplicate physical threats within a 5-meter radius. |
-| **Multimodal Vision LLM** | 🟡 **Simulated** | We are *not* sending real images bounding boxes to an API. We trigger a mock function representing a 90% vision confirmation probability. |
+| **Multimodal Vision LLM** | 🟢 **Actual (with fallback)** | `phase2_engine.py` calls Gemini Vision for anomaly frame verification when `GEMINI_API_KEY` is present. If image fetch/API fails, a safety-first fallback still marks anomalies as hazards. |
 | **Depth Sensing (Z-Axis)** | 🟡 **Simulated** | Complex 3D sine wave and exponential ridge functions construct realistic terrain rather than relying on a 2GB Lidar point cloud. |
 | **A\* Pathfinding AI** | 🟢 **Actual** | The A* algorithm is a **100% real** matrix. It successfully paths through a 3D volume, avoiding blast radii and punishing steep Z-axis climbs. |
 
@@ -62,7 +62,7 @@ This is the core tactical engine running on the base-camp servers. It ingests th
    - `dy = Smoothed_Velocity * sin(Smoothed_Yaw) * dt`
    By accumulating these deltas from `[Base Camp X:0, Y:0]`, we plot the entire flight path **without ever utilizing a satellite map**.
 3. **Anomaly Clustering**: Any interpolated X/Y coordinate tied to a GPR score `> 0.95` is flagged. Because GPR signals often trigger sequentially on the same object, the engine clusters all points within 5 meters of each other to deduplicate the threat matrix.
-4. **LLM Verification API**: For every clustered anomaly, the system extracts the associated `Camera_Frame_URL` and sends a mock payload to a multimodal LLM to visually confirm the threat. 
+4. **LLM Verification API**: For every clustered anomaly, the system extracts the associated `Camera_Frame_URL` and sends it to Gemini for multimodal mine verification. If no API key is configured (or the frame is unavailable), the system applies a conservative fallback and keeps the hazard.
 5. **Terrain-Aware A\* (A-Star) Pathfinding**: 
    - We generate a global **Topological Grid**, attaching a randomly varying `Z` altitude to every `X/Y` grid block.
    - We assign a `15-meter` blast exclusion radius around every confirmed mine.
@@ -95,3 +95,90 @@ We built a custom web-based tracking dashboard using `Streamlit` and `Altair` to
 4. **Live Color-Encoding**: The Safe Convoy Route itself is not a static color! The `turbo` color mapping adjusts dynamically across the line based on the exact `Z: Altitude` slope the convoy will be navigating at that specific meter along the track.
 
 *The result is a tactical PoC demonstrating how internal Dead Reckoning, Vision Sensing, and multi-cost Pathfinding logic can execute complex drone logistics inside a GPS jammed environment.*
+
+---
+
+## Gemini Vision Configuration
+
+`phase2_engine.py` supports real multimodal mine verification via Gemini.
+
+1. Add a `GEMINI_API_KEY` in your `.env` file (or export it in your shell).
+2. Optionally set `GEMINI_MODEL` (default: `gemini-2.5-flash`).
+3. Run the normal pipeline:
+
+```bash
+python phase1_sim.py
+python phase2_engine.py
+streamlit run phase3_dashboard.py
+```
+
+Notes:
+- The default simulated `Camera_Frame_URL` values in Phase 1 are internal placeholders and may not be fetchable by Phase 2.
+- If a frame cannot be downloaded/read, Phase 2 logs a warning and keeps the anomaly as a confirmed hazard (safety-first behavior).
+
+---
+
+## MongoDB Atlas Integration (Operational Data Plane)
+
+This project now supports Atlas as a first-class backend for mission telemetry, tactical outputs, and live operations.
+
+### Environment Variables
+
+Add these values to `.env`:
+
+```bash
+MONGODB_URI=mongodb+srv://<user>:<password>@<cluster>.mongodb.net/?retryWrites=true&w=majority
+MONGODB_DB=aero_hacks
+MONGODB_APP_NAME=drone-recon-poc
+ATLAS_PHASE1_TELEMETRY_MODE=summary
+```
+
+`ATLAS_PHASE1_TELEMETRY_MODE` controls Phase 1 upload behavior:
+- `summary` (default): writes mission metadata only for fast dashboard runs.
+- `full`: writes every telemetry row to Atlas `telemetry_raw` (slower, for full Atlas replay/change-stream demos).
+
+Install dependency:
+
+```bash
+pip install pymongo
+```
+
+### Atlas Features Enabled
+
+- **Time Series Collection** for `telemetry_raw` with retention window.
+- **Geospatial Indexes** on hazard points and route geometries (`2dsphere`).
+- **Mission Store + Tactical Payloads** for dashboard retrieval by mission.
+- **Atlas Search Index** (`vision_text_search`) on `vision_events`.
+- **Atlas Vector Search Index** (`vision_embedding_vector`) for optional embedding similarity.
+- **Change Stream Worker** that consumes telemetry stream events and writes alerts.
+
+### Setup and Validation
+
+Run schema/index setup:
+
+```bash
+python atlas_setup.py
+```
+
+Run end-to-end mission (local artifacts + Atlas writes):
+
+```bash
+python phase1_sim.py
+python phase2_engine.py
+streamlit run phase3_dashboard.py
+```
+
+Optional change-stream listener:
+
+```bash
+python atlas_live_worker.py --events_per_cycle 20 --cycle_seconds 8
+```
+
+Optional Atlas feature queries:
+
+```bash
+python atlas_queries.py summary --mission_id <mission_id>
+python atlas_queries.py geo --mission_id <mission_id> --x 250 --y 250 --radius_m 75
+python atlas_queries.py search --term error
+python atlas_queries.py vector --mission_id <mission_id> --dims 768
+```
